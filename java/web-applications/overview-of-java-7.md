@@ -1,4 +1,4 @@
-# Notes on Java features
+# Overview of Java 7
 
 
 ## Language features
@@ -55,6 +55,7 @@ Thread thread = new Thread(this::doSomething);
 
 
 ## Java APIs
+
 Several Java technologies will be explored during the development of this application. Here's a reference of technologies that may be found:
 
 Included in Java SE:
