@@ -221,3 +221,5 @@ Due to the requirement of being able to work offline, not only must they provide
 - https://medium.com/javascript-scene/top-javascript-frameworks-topics-to-learn-in-2017-700a397b711#.76xaw9rna
 - https://hackernoon.com/type-checking-in-javascript-getting-started-with-flow-8532c11aceb3#.x4f55riw7
 - https://ashleynolan.co.uk/blog/frontend-tooling-survey-2016-results
+- https://hacks.mozilla.org/2017/09/building-the-dom-faster-speculative-parsing-async-defer-and-preload/
+- https://medium.com/actualize-network/modern-html-explained-for-dinosaurs-65e56af2981
