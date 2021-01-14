@@ -906,6 +906,241 @@ At this point, we can apply this migration to get our database up to date:
 npx typeorm migration:run
 ```
 
+To use our NestJS application with MongoDB, instead, we can use the Mongoose library:
+```shell
+npm i mongoose @nestjs/mongoose
+npm i -D @types/mongoose
+```
+
+To setup a connection to this database:
+```typescript
+...
+import { MongooseModule } from '@nestjs/mongoose';
+...
+imports: [
+  ...
+  MongooseModule.forRoot('mongodb://localhost:27017/nest-course'),
+]
+...
+```
+
+Here we can get away with just passing a connection string to the setup method for the root module. The connection string just contains host, port and database name.
+
+If after adding the Mongoose module to our application we see compilation errors targeting the Mongoose library itself, it might be that the library is not fully up to date with TypeScript. We can prevent the compiler from checking the library by changing our `tsconfig.json`:
+```json
+{
+  ...
+  "compilerOptions": {
+    ...
+    "skipLibCheck": true
+  },
+  ...
+}
+```
+
+No-SQL databases such as MongoDB are based on the concept of "data models", which are used to create or edit documents or collections of documents in the database. First we need to define a schema, which maps to a collection in the database, defining the shape of the documents contained in that collection.
+
+We can define schemas with decorators in our NestJS applications. For example, let's edit `coffee.entity.ts`:
+```typescript
+import { Schema, Prop, SchemaFactory } from "@nestjs/mongoose";
+import { Document } from 'mongoose';
+
+@Schema()
+export class Coffee extends Document {
+  @Prop()
+  name: string;
+
+  @Prop()
+  brand: string;
+
+  @Prop([String])
+  flavors: string[];
+}
+
+export const CoffeeSchema = SchemaFactory.createForClass(Coffee);
+```
+
+Here the `@Schema()` decorator will take the class name, convert it to lowercase, and pluralize it, so the resulting collection in this case will be called `coffees` in the database. MongoDB adds a `_id` property to schemas by default, where the auto-generated primary key is stored. This property is a string, so we're going to need to update the types wherever we use it. Since not everything can be done just with decorators, we're also exporting a schema object `CoffeeSchema`, that callers can use if needed.
+
+To make MongoDB aware of the new schema we've defined, we need to change `coffees.module.ts`:
+```typescript
+...
+import { MongooseModule } from '@nestjs/mongoose';
+...
+imports: [
+  ...
+  MongooseModule.forFeature([
+    {
+      name: Coffee.name,
+      schema: CoffeeSchema,
+    },
+  ]),
+],
+...
+```
+
+Here we load a feature-related Mongoose module for the Coffees module, and we set it up with a new schema definition based on the new schema for the `Coffee` entity.
+
+In a NoSQL database, each instance of a model is called a *document*. In Mongoose we can handle documents with models. For example, in `coffees.service.ts`:
+```typescript
+...
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+...
+constructor(
+  @InjectModel(Coffee.name) private readonly coffeeModel: Model<Coffee>,
+) {}
+
+findAll() {
+  return this.coffeeModel.find().exec();
+}
+
+async findOne(id: string) {
+  const coffee = await this.coffeeModel.findOne({ _id: id }).exec();
+  if (!coffee) {
+    throw new NotFoundException(`Coffee #${id} not found`);
+  }
+  return coffee;
+}
+
+create(createCoffeeDto: CreateCoffeeDto) {
+  const coffee = new this.coffeeModel(createCoffeeDto);
+  return coffee.save();
+}
+
+async update(id: string, updateCoffeeDto: UpdateCoffeeDto) {
+  const existingCoffee = await this.coffeeModel
+    .findOneAndUpdate({ _id: id }, { $set: updateCoffeeDto }, { new: true})
+    .exec();
+
+  if (!existingCoffee) {
+    throw new NotFoundException(`Coffee #${id} not found`);
+  }
+  return existingCoffee;
+}
+
+async remove(id: string) {
+  const coffee = await this.findOne(id);
+  return coffee.remove();
+}
+...
+```
+
+In Mongoose, queries are run by calling `exec()`. To create a new instance of our model, we do `new this.coffeeModel(createCoffeeDto)`, which can then just be saved to be written to the database. In the `findOneAndUpdate()` method, the first argument contains the setting for the query that will search the document we want to change: in this case we just specify its ID; the second argument contains the setting to specify how we want to update the document: in this case we use `$set` to update the existing document; the third argument specifies what to do after the query is executed, and in our case we want to retrieve the newly updated document (hadn't we specified this, we'd have received the original document, prior to the modification). In the `remove()` method, we simply use the existing `findOne()` method, which retrieves the document we're looking for, also taking care of throwing an error in case it doesn't exist, and just call `remove()` on the document.
+
+To handle pagination using MongoDB, we first need to create a DTO for the pagination query:
+```shell
+nest g class common/dto/pagination-query.dto --no-spec
+```
+```typescript
+import { IsOptional, IsPositive } from 'class-validator';
+
+export class PaginationQueryDto {
+  @IsOptional()
+  @IsPositive()
+  limit: number;
+
+  @IsOptional()
+  @IsPositive()
+  offset: number;
+}
+```
+
+Then in the `coffeesService`:
+```typescript
+...
+import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+...
+findAll(paginationQuery: PaginationQueryDto) {
+  const { limit, offset } = paginationQuery;
+  return this.coffeeModel.find().skip(offset).limit(limit).exec();
+}
+...
+```
+
+Let's add a new schema for the `Event` model:
+```typescript
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import * as mongoose from 'mongoose';
+
+@Schema()
+export class Event extends mongoose.Document {
+  @Prop()
+  type: string;
+
+  @Prop()
+  name: string;
+
+  @Prop(mongoose.SchemaTypes.Mixed)
+  payload: Record<string, any>;
+}
+
+export const EventSchema = SchemaFactory.createForClass(Event);
+```
+
+Here since we want to store a complex type of `Record<string, any>`, we use the `mongoose.SchemaTypes.Mixed` type of MongoDB, which works for any data type. Let's add a new property to `Coffee` to count events:
+```typescript
+...
+@Prop({ default: 0 })
+recommendations: number;
+...
+```
+
+We want to increase the count of recommendations for a coffee entity every time a new event is stored. For this we need transactions, and to create them we need direct access to the MongoDB connection in the `CoffeesService`:
+```typescript
+...
+import { ..., InjectConnection } from '@nestjs/mongoose';
+import { ..., Connection } from 'mongoose';
+import { Event } from '../events/entities/event.entity';
+...
+constructor(
+  ...
+  @InjectConnection() private readonly connection: Connection,
+  @InjectModel(Event.name) private readonly eventModel: Model<Event>,
+) {}
+...
+async recommendCoffee(coffee: Coffee) {
+  const session = await this.connection.startSession();
+  session.startTransaction();
+
+  try {
+    coffee.recommendations++;
+
+    const recommendEvent = new this.eventModel({
+      name: 'recommend_coffee',
+      type: 'coffee',
+      payload: { coffeeId: coffee.id },
+    });
+    await recommendEvent.save({ session });
+    await coffee.save({ session });
+
+    await session.commitTransaction();
+  } catch (err) {
+    await session.abortTransaction();
+  } finally {
+    session.endSession();
+  }
+}
+...
+```
+
+The first thing to do is to start a new session from the database connection, and then start a new transaction from the connection session. Then, we update the existing `Coffee` model, and create a new event for the recommendation, and we save both to the new session we created. Then we commit the transaction.
+
+With Mongoose we can define indexes at the schema level, or at the field level. For example, to create an index fo the event name:
+```typescript
+...
+export class Event extends mongoose.Document {
+  ...
+  @Prop({ index: true })
+  name: string;
+  ...
+}
+...
+EventSchema.index({ name: 1, type: -1 });
+```
+
+We also created a compound index of the `name` and `type` fields, with `name` sorted in ascending order, and `type` sorted in descending order.
+
 ## Dependency Injection
 
 In NestJS, the NestJS runtime environment works also as a dependency injection container. When the container instantiates the `CoffeesController`, it checks if there's any dependencies needed. In our case there's one dependency: `coffeesService` of type `CoffeesService`. Given the type of the dependency, the container will check if an instance of `CoffeesService` is cached, and use that one, or it creates one and caches it. This is because by default the container is configured to use singletons. When creating a new instance of `CoffeesService`, again the container first checks if that class has dependencies, and it resolves each of them beforehand. All this analysis and instantiation is done during the bootstrap of the application.
