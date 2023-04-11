@@ -312,7 +312,7 @@ Handling forms includes capturing user inputs, validating them, creating a model
 - *reactive forms* provide direct access to form model, which makes them more scalable, reusable and testable, thus more suitable for complex forms
 - *template-driven forms* rely on directives in the template to manipulate the model, and they're more suitable for simple forms
 
-### Rective forms
+### Reactive forms
 
 With reactive forms, we define the form model in the component class:
 
@@ -734,4 +734,3 @@ to apply a guard to a route, it's enough to add a parameter to the route definit
 ```
 
 ## E2E tests
-
